@@ -1,9 +1,7 @@
-# Autorité centrale – TP Messagerie
+# Autorité centrale (broker / tracker) – TP Messagerie
 
-Serveur qui enregistre les adresses des pairs et les distribue à ceux qui veulent se connecter.
-
-Chaque membre du groupe a sa propre autorité, il n'y a donc pas de protocole commun pour ces routes.
-L'autorité ne transmet aucun message : une fois l'adresse obtenue, les pairs font la poignée de main directement entre eux.
+Serveur qui sert d'annuaire, comme un DNS : il retient les `id = url` des pairs et les distribue.
+Il ne transmet aucun message et n'enregistre pas les connexions.
 
 ## Lancer
 
@@ -12,53 +10,57 @@ npm install
 npm start
 ```
 
-Le port par défaut est **4000**. Pour en changer :
-
-```bash
-PORT=5000 npm start
-```
+Le port par défaut est **4000**. Pour en changer : `PORT=5000 npm start`.
 
 ## Routes
 
 | Méthode | Route | Rôle | Réponses |
 |---|---|---|---|
-| `POST` | `/registre` | Enregistre un pair ou met à jour ses informations | `201` nouveau pair, `204` mis à jour, `400` pas d'`id` ou d'`url` |
-| `GET` | `/pairs` | Renvoie la liste des pairs enregistrés | `200` |
+| `POST` | `/register` | Inscrit un pair, ou met à jour son adresse | `201` nouveau pair, `200` déjà connu, `400` si `id` ou `url` manque |
+| `DELETE` | `/unregister/{id}` | Retire un pair | `204` retiré, `404` inconnu |
+| `GET` | `/pairs` | Outil : affiche les pairs avec leur présence (`en ligne` / `hors ligne`) | `200` |
 
-Corps de `POST /registre` (`id` et `url` obligatoires, avec `Content-Type: application/json`) :
+Corps de `POST /register` (avec `Content-Type: application/json`) :
 
 ```json
-{ "id": "Audrey", "url": "https://...", "publicKey": "base64..." }
+{ "id": "Audrey", "url": "https://..." }
 ```
 
-Réponse de `GET /pairs` :
+Réponse de `POST /register` : la liste des pairs en ligne.
 
 ```json
 [
-  { "id": "Audrey", "url": "https://...", "publicKey": "base64..." }
+  { "id": "Audrey", "url": "https://..." },
+  { "id": "Laurie", "url": "https://..." }
 ]
 ```
 
-L'`id` est le prénom : c'est la clé de l'annuaire. Si un pair s'annonce avec un prénom déjà connu, sa nouvelle URL remplace l'ancienne.
-Le `/` final de l'URL est retiré. La liste est gardée en mémoire : elle est perdue si on redémarre l'autorité.
+## Diffusion aux autres pairs
+
+- Nouveau pair ou changement d'adresse : le broker envoie `POST /register` `{ id, url }` à tous les autres.
+- Pair retiré : les autres reçoivent `DELETE /unregister/{id}`.
+
+## Présence
+
+- Toutes les 10 s, le broker ping chaque pair avec `GET /health` (sans `Origin`).
+- 5 échecs de suite → le pair passe `hors ligne` et les autres reçoivent `DELETE /unregister/{id}`.
+- S'il répond à nouveau ou refait un `/register`, il repasse `en ligne` et les autres reçoivent `/register`.
+- Un pair peut aussi se retirer lui-même avec `DELETE /unregister/{id}`.
 
 ## Limites connues
 
-- L'autorité ne vérifie pas les identités : n'importe qui peut s'annoncer sous un prénom et remplacer son URL.
-- Deux personnes avec le même prénom ne sont pas gérées : la dernière annonce remplace la précédente.
-- L'autorité n'enregistre pas les connexions et ne relaie pas les messages. Chaque serveur enregistre ses connexions, et le relais revient au broker.
-
-## Retrait des pairs
-
-Toutes les 10 s, l'autorité envoie `GET /health` à chaque pair enregistré, sans en-tête `Origin`.
-Après 5 échecs d'affilée, le pair est retiré de la liste. Une seule réponse remet le compteur à zéro.
+- Aucune vérification d'identité : on peut s'inscrire sous n'importe quel prénom, ou désinscrire quelqu'un d'autre.
+- Deux pairs avec le même prénom : le dernier inscrit écrase l'autre.
+- Tout est en mémoire, donc un redémarrage du broker vide la liste.
 
 ## Tester
 
 ```bash
-curl -X POST http://localhost:4000/registre \
+curl -X POST http://localhost:4000/register \
   -H "Content-Type: application/json" \
-  -d '{"id":"Audrey","url":"http://localhost:3000","publicKey":""}'
+  -d '{"id":"Audrey","url":"http://localhost:3000"}'
 
 curl http://localhost:4000/pairs
+
+curl -X DELETE http://localhost:4000/unregister/Audrey
 ```
